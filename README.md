@@ -1,4 +1,4 @@
-# CellChat workflow template
+# R-cellchat-workflow-template
 
 一个独立、可移植的 CellChat 分析模板。仓库不采用复杂的 `src/`、`workflow/` 分层，核心分析只有一个文件：
 
@@ -65,13 +65,14 @@ remotes::install_github("jinworks/CellChat")
 
 ## 输出
 
-运行后在 `cellchat_results/` 中生成：
+运行后生成：
 
-- `tables/`：配体-受体及通路通讯表；
-- `plots/`：网络图、热图、气泡图、信号角色和组间差异图；
-- `cellchat_object.rds` 或分组对象与合并对象；
-- `README_results_CN.md`：分析模式与比较方向说明；
-- `sessionInfo.txt`：软件环境记录。
+- `results/tables/`：配体-受体及通路通讯表；
+- `results/plots/`：网络图、热图、气泡图、信号角色和组间差异图；
+- `results/README_results_CN.md`：分析模式、样本和比较方向说明；
+- `results/sessionInfo.txt`：软件环境记录；
+- `data/processed/cellchat_object.rds`：单样本 CellChat 对象；
+- `data/processed/cellchat_objects_by_group.rds` 与 `cellchat_merged.rds`：双样本或多样本对象。
 
 比较目录使用 `EXP_vs_CON` 形式命名。差异图按第二组相对第一组解释：红色表示第二组更强，蓝色表示第一组更强。
 

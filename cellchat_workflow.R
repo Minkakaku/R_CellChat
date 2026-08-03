@@ -21,7 +21,8 @@ suppressPackageStartupMessages({
 # ------------------------------------------------------------------------------
 
 input_rds <- "path/to/seurat_object.rds"
-output_dir <- "cellchat_results"
+output_dir <- "results"
+object_dir <- file.path("data", "processed")
 
 species <- "human"                 # human 或 mouse
 assay <- "RNA"                     # CellChat 使用的 Seurat assay
@@ -50,6 +51,7 @@ database_categories <- c(
 # ------------------------------------------------------------------------------
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(object_dir, recursive = TRUE, showWarnings = FALSE)
 table_dir <- file.path(output_dir, "tables")
 plot_dir <- file.path(output_dir, "plots")
 dir.create(table_dir, showWarnings = FALSE)
@@ -376,7 +378,7 @@ if (analysis_mode == "single") {
   }
 
   cellchat_list <- setNames(list(run_cellchat(seurat_obj, dataset_name)), dataset_name)
-  saveRDS(cellchat_list[[1]], file.path(output_dir, "cellchat_object.rds"))
+  saveRDS(cellchat_list[[1]], file.path(object_dir, "cellchat_object.rds"))
 
   result_note <- c(
     "# CellChat 分析结果",
@@ -384,7 +386,8 @@ if (analysis_mode == "single") {
     "- 分析模式：单样本",
     paste0("- 样本：", dataset_name),
     paste0("- 细胞类型列：", celltype_col),
-    paste0("- 配体-受体表：tables/", safe_name(dataset_name), "_ligand_receptor.csv")
+    paste0("- 配体-受体表：tables/", safe_name(dataset_name), "_ligand_receptor.csv"),
+    paste0("- CellChat 对象：", file.path(object_dir, "cellchat_object.rds"))
   )
 } else {
   # 双样本和多样本模式共用同一套推断；multi 会自动生成全部两两比较。
@@ -421,8 +424,8 @@ if (analysis_mode == "single") {
     cell.prefix = TRUE
   )
 
-  saveRDS(cellchat_list, file.path(output_dir, "cellchat_objects_by_group.rds"))
-  saveRDS(merged_cellchat, file.path(output_dir, "cellchat_merged.rds"))
+  saveRDS(cellchat_list, file.path(object_dir, "cellchat_objects_by_group.rds"))
+  saveRDS(merged_cellchat, file.path(object_dir, "cellchat_merged.rds"))
 
   combined_communication <- do.call(
     rbind,
@@ -446,7 +449,9 @@ if (analysis_mode == "single") {
     paste0("- 分析模式：", ifelse(analysis_mode == "two", "双样本比较", "多样本比较")),
     paste0("- 比较顺序：", paste(names(cellchat_list), collapse = " → ")),
     paste0("- 共同细胞类型：", paste(shared_celltypes, collapse = ", ")),
-    "- 差异图命名为 第二组_vs_第一组；红色表示第二组增强，蓝色表示第一组增强。"
+    "- 差异图命名为 第二组_vs_第一组；红色表示第二组增强，蓝色表示第一组增强。",
+    paste0("- 分组对象：", file.path(object_dir, "cellchat_objects_by_group.rds")),
+    paste0("- 合并对象：", file.path(object_dir, "cellchat_merged.rds"))
   )
 }
 
@@ -454,4 +459,5 @@ writeLines(result_note, file.path(output_dir, "README_results_CN.md"))
 capture.output(sessionInfo(), file = file.path(output_dir, "sessionInfo.txt"))
 future::plan("sequential")
 
-message("CellChat analysis completed: ", normalizePath(output_dir))
+message("CellChat results: ", normalizePath(output_dir))
+message("CellChat objects: ", normalizePath(object_dir))
