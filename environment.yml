@@ -1,0 +1,11 @@
+name: cellchat-analysis
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base>=4.3
+  - r-seurat>=5
+  - r-future
+  - r-ggplot2
+  - bioconductor-complexheatmap
+  - r-remotes
