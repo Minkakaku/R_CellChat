@@ -1,78 +1,31 @@
-# CellChat workflow template
+# R-cellchat-workflow-template
 
-一个独立、可移植的 CellChat 分析模板。仓库不采用复杂的 `src/`、`workflow/` 分层，核心分析只有一个文件：
+独立 CellChat 分析点。正式代码只有根目录 cellchat_workflow.R，直接接收主 Seurat 流程生成的注释后 RDS。
 
-```text
-cellchat_workflow.R
-```
+## 模式
 
-脚本通过 `analysis_mode` 明确区分三种场景：
+- single：整个对象或指定一个数据集的通讯网络。
+- two：两个数据集的网络推断和直接比较。
+- multi：三个及以上数据集，并生成全部两两比较。
 
-- `single`：一个样本的完整 CellChat 分析；
-- `two`：两个样本或两个条件的直接比较；
-- `multi`：三个及以上样本，并自动生成所有两两比较；
-- 配体-受体表、通路表、CellChat 对象及主要图形输出；
-- PDF 与 300 dpi PNG 双格式保存。
+## 运行
 
-## 使用
+单数据集：
 
-先修改 `cellchat_workflow.R` 开头的参数：
+    Rscript cellchat_workflow.R --input annotated.rds --output results/cellchat --mode single --species human --celltype-col cell_type
 
-```r
-input_rds <- "path/to/seurat_object.rds"
-species <- "human"
-assay <- "RNA"
-celltype_col <- "cell_type"
-```
+双数据集：
 
-单样本分析：
+    Rscript cellchat_workflow.R --input annotated.rds --output results/cellchat --mode two --sample-col group --samples CON,EXP
 
-```r
-analysis_mode <- "single"
-sample_col <- "orig.ident"
-samples <- "Sample1"
-```
+多数据集：
 
-双样本比较：
+    Rscript cellchat_workflow.R --input annotated.rds --output results/cellchat --mode multi --sample-col orig.ident --samples S1,S2,S3
 
-```r
-analysis_mode <- "two"
-sample_col <- "group"
-samples <- c("CON", "EXP")
-```
+可通过 --object-dir 指定 CellChat RDS；默认和表格、图、README_results_CN.md 一起放在输出目录。最终图同时保存 PDF 和 600 dpi PNG。
 
-多样本比较：
+## 解释边界
 
-```r
-analysis_mode <- "multi"
-sample_col <- "orig.ident"
-samples <- c("Sample1", "Sample2", "Sample3")
-```
+CellChat 根据配体/受体表达和数据库先验推断通讯概率。两组或多组网络图是数据集间描述性比较；细胞层面置换或概率不能替代生物学重复层面的 CON/EXP 推断。若有多个生物学样本，应分别运行或在样本层面复核网络指标。
 
-运行：
-
-```bash
-Rscript cellchat_workflow.R
-```
-
-## 依赖
-
-```r
-install.packages(c("Seurat", "future", "ggplot2", "remotes"))
-BiocManager::install("ComplexHeatmap")
-remotes::install_github("jinworks/CellChat")
-```
-
-## 输出
-
-运行后在 `cellchat_results/` 中生成：
-
-- `tables/`：配体-受体及通路通讯表；
-- `plots/`：网络图、热图、气泡图、信号角色和组间差异图；
-- `cellchat_object.rds` 或分组对象与合并对象；
-- `README_results_CN.md`：分析模式与比较方向说明；
-- `sessionInfo.txt`：软件环境记录。
-
-比较目录使用 `EXP_vs_CON` 形式命名。差异图按第二组相对第一组解释：红色表示第二组更强，蓝色表示第一组更强。
-
-多样本分析会自动完成所有两两比较。如果某一对样本的通讯网络完全相同，脚本会跳过没有信息量的空差异热图，并继续输出差异网络、配体-受体气泡图和信息流比较图。
+方法依据：CellChat 官方教程与论文（PMID: 33597522）。

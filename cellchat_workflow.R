@@ -1,12 +1,5 @@
-# ==============================================================================
-# CellChat 完整分析脚本
-#
-# 用法：
-#   1. 修改“参数区”；
-#   2. analysis_mode 可选择 single、two 或 multi；
-#   3. single 跑一个样本，two 比较两个样本，multi 自动做多样本两两比较；
-#   4. 运行：Rscript cellchat_workflow.R
-# ==============================================================================
+# CellChat 独立分析入口
+# single、two、multi 共用一个完整脚本，直接接收主 Seurat 流程输出的 RDS。
 
 suppressPackageStartupMessages({
   library(CellChat)
@@ -16,27 +9,50 @@ suppressPackageStartupMessages({
   library(Seurat)
 })
 
-# ------------------------------------------------------------------------------
-# 1. 参数区：新项目通常只需要修改这里
-# ------------------------------------------------------------------------------
+NPG_COLORS <- c(
+  "#E64B35", "#4DBBD5", "#00A087", "#3C5488", "#F39B7F",
+  "#8491B4", "#91D1C2", "#DC0000", "#7E6148", "#B09C85"
+)
+npg_palette <- function(labels) {
+  colors <- NPG_COLORS
+  if (length(labels) > length(colors)) {
+    extra_n <- length(labels) - length(colors)
+    extra <- grDevices::colorRampPalette(NPG_COLORS)(2L * extra_n + 1L)[seq.int(2L, 2L * extra_n, by = 2L)]
+    colors <- c(colors, extra)
+  }
+  stats::setNames(colors[seq_along(labels)], labels)
+}
 
-input_rds <- "path/to/seurat_object.rds"
-output_dir <- "cellchat_results"
+# 功能：读取 --name value 形式的命令行参数。
+arg_value <- function(name, default = NULL) {
+  args <- commandArgs(trailingOnly = TRUE)
+  index <- match(name, args)
+  if (is.na(index) || index == length(args)) default else args[[index + 1L]]
+}
 
-species <- "human"                 # human 或 mouse
-assay <- "RNA"                     # CellChat 使用的 Seurat assay
-celltype_col <- "cell_type"        # 细胞类型注释列
+# 功能：解析逗号分隔的样本或条件名称。
+split_values <- function(x) {
+  if (is.null(x) || x == "") character(0) else trimws(strsplit(x, ",", fixed = TRUE)[[1]])
+}
 
-analysis_mode <- "two"             # single、two 或 multi
-sample_col <- "group"              # 样本/分组所在的 metadata 列
-samples <- c("CON", "EXP")         # single 填 1 个，two 填 2 个，multi 填 3 个以上
-
-min_cells <- 10
-workers <- 4
-prob_type <- "triMean"
-population_size <- TRUE
-smooth_ppi <- FALSE
-seed <- 123
+input_rds <- arg_value("--input")
+output_dir <- arg_value("--output")
+analysis_mode <- arg_value("--mode", "single")
+if (is.null(input_rds) || is.null(output_dir)) {
+  stop("用法：Rscript cellchat_workflow.R --input annotated.rds --output results/cellchat --mode two --sample-col group --samples CON,EXP")
+}
+object_dir <- arg_value("--object-dir", output_dir)
+species <- arg_value("--species", "human")
+assay <- arg_value("--assay", "RNA")
+celltype_col <- arg_value("--celltype-col", "cell_type")
+sample_col <- arg_value("--sample-col", "group")
+samples <- split_values(arg_value("--samples", ""))
+min_cells <- as.integer(arg_value("--min-cells", "10"))
+workers <- as.integer(arg_value("--workers", "4"))
+prob_type <- arg_value("--prob-type", "triMean")
+population_size <- as.logical(arg_value("--population-size", "TRUE"))
+smooth_ppi <- as.logical(arg_value("--smooth-ppi", "FALSE"))
+seed <- as.integer(arg_value("--seed", "123"))
 
 # 使用 CellChatDB 的三类主要配体-受体互作。
 database_categories <- c(
@@ -46,30 +62,33 @@ database_categories <- c(
 )
 
 # ------------------------------------------------------------------------------
-# 2. 输出函数：所有主要图同时保存为 PDF 和 300 dpi PNG
+# 2. 输出函数：所有主要图同时保存为 PDF 和 600 dpi PNG
 # ------------------------------------------------------------------------------
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-table_dir <- file.path(output_dir, "tables")
-plot_dir <- file.path(output_dir, "plots")
-dir.create(table_dir, showWarnings = FALSE)
-dir.create(plot_dir, showWarnings = FALSE)
+dir.create(object_dir, recursive = TRUE, showWarnings = FALSE)
+table_dir <- output_dir
+plot_dir <- output_dir
 
+# 功能：把标签转换成可安全用于文件名的字符串（函数：safe_name）。
 safe_name <- function(x) {
   gsub("[^A-Za-z0-9._-]", "_", x)
 }
 
+# 功能：把 ggplot 同时保存为矢量 PDF 和 600 dpi PNG（函数：save_ggplot）。
 save_ggplot <- function(plot, stem, width = 8, height = 6) {
+  plot <- plot + ggplot2::labs(subtitle = NULL) + ggplot2::theme(plot.subtitle = ggplot2::element_blank())
   ggsave(paste0(stem, ".pdf"), plot, width = width, height = height)
-  ggsave(paste0(stem, ".png"), plot, width = width, height = height, dpi = 300)
+  ggsave(paste0(stem, ".png"), plot, width = width, height = height, dpi = 600)
 }
 
+# 功能：把基础绘图或 ComplexHeatmap 同时保存为 PDF 和 PNG（函数：save_draw）。
 save_draw <- function(draw_fun, stem, width = 8, height = 7) {
   pdf(paste0(stem, ".pdf"), width = width, height = height)
   draw_fun()
   dev.off()
 
-  png(paste0(stem, ".png"), width = width, height = height, units = "in", res = 300)
+  png(paste0(stem, ".png"), width = width, height = height, units = "in", res = 600)
   draw_fun()
   dev.off()
 }
@@ -84,11 +103,13 @@ has_network_difference <- function(cellchat, pair, measure) {
 # 3. 单个数据集的 CellChat 推断
 # ------------------------------------------------------------------------------
 
+# 功能：对一个数据集完成 CellChat 配体-受体通讯推断（函数：run_cellchat）。
 run_cellchat <- function(seurat_obj, dataset_name) {
   message("Running CellChat: ", dataset_name)
 
   # 将真实细胞类型作为通讯网络节点，不使用技术性 cluster 编号。
   seurat_obj@meta.data[[celltype_col]] <- factor(seurat_obj@meta.data[[celltype_col]])
+  seurat_obj <- SeuratObject::JoinLayers(seurat_obj, assay = assay)
   seurat_obj@meta.data$samples <- factor(dataset_name)
   Idents(seurat_obj) <- seurat_obj@meta.data[[celltype_col]]
 
@@ -156,13 +177,14 @@ run_cellchat <- function(seurat_obj, dataset_name) {
 # 4. 单个 CellChat 对象的主要图
 # ------------------------------------------------------------------------------
 
+# 功能：输出单个 CellChat 对象的网络、热图、气泡图和信号角色图（函数：plot_single_cellchat）。
 plot_single_cellchat <- function(cellchat, dataset_name) {
   label <- safe_name(dataset_name)
   out <- file.path(plot_dir, label)
   dir.create(out, showWarnings = FALSE)
 
   celltypes <- levels(cellchat@idents)
-  celltype_colors <- setNames(hcl.colors(length(celltypes), "Dark 3"), celltypes)
+  celltype_colors <- npg_palette(celltypes)
   group_size <- as.numeric(table(cellchat@idents))
 
   # 全局通讯数量网络。
@@ -175,7 +197,7 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
         color.use = celltype_colors,
         weight.scale = TRUE,
         label.edge = FALSE,
-        title.name = paste0(dataset_name, " - interaction count")
+        title.name = NULL
       )
     },
     file.path(out, "01_network_count")
@@ -191,7 +213,7 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
         color.use = celltype_colors,
         weight.scale = TRUE,
         label.edge = FALSE,
-        title.name = paste0(dataset_name, " - interaction strength")
+        title.name = NULL
       )
     },
     file.path(out, "02_network_weight")
@@ -200,13 +222,13 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
   # 细胞类型之间通讯数量和强度热图。
   save_draw(
     function() ComplexHeatmap::draw(
-      netVisual_heatmap(cellchat, measure = "count", color.heatmap = "Reds")
+      netVisual_heatmap(cellchat, measure = "count", color.heatmap = c("#FFF5F0", "#E64B35"))
     ),
     file.path(out, "03_heatmap_count")
   )
   save_draw(
     function() ComplexHeatmap::draw(
-      netVisual_heatmap(cellchat, measure = "weight", color.heatmap = "Reds")
+      netVisual_heatmap(cellchat, measure = "weight", color.heatmap = c("#FFF5F0", "#E64B35"))
     ),
     file.path(out, "04_heatmap_weight")
   )
@@ -237,12 +259,13 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
 # 5. 多组对象合并与比较
 # ------------------------------------------------------------------------------
 
+# 功能：比较双样本或多样本 CellChat 网络并明确比较方向（函数：plot_cellchat_comparison）。
 plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
   groups <- names(cellchat_list)
   out <- file.path(plot_dir, "comparison")
   dir.create(out, showWarnings = FALSE)
 
-  dataset_colors <- setNames(hcl.colors(length(groups), "Dark 3"), groups)
+  dataset_colors <- npg_palette(groups)
   if ("CON" %in% groups) dataset_colors["CON"] <- "#72b1b9"
   if ("EXP" %in% groups) dataset_colors["EXP"] <- "#f6ae00"
 
@@ -301,7 +324,7 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
             merged_cellchat,
             comparison = c(reference, experiment),
             measure = "count",
-            color.heatmap = c("#2166AC", "#B2182B")
+            color.heatmap = c("#3C5488", "#E64B35")
           )
         ),
         file.path(pair_out, "05_difference_heatmap_count")
@@ -314,7 +337,7 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
             merged_cellchat,
             comparison = c(reference, experiment),
             measure = "weight",
-            color.heatmap = c("#2166AC", "#B2182B")
+            color.heatmap = c("#3C5488", "#E64B35")
           )
         ),
         file.path(pair_out, "06_difference_heatmap_weight")
@@ -376,7 +399,7 @@ if (analysis_mode == "single") {
   }
 
   cellchat_list <- setNames(list(run_cellchat(seurat_obj, dataset_name)), dataset_name)
-  saveRDS(cellchat_list[[1]], file.path(output_dir, "cellchat_object.rds"))
+  saveRDS(cellchat_list[[1]], file.path(object_dir, "cellchat_object.rds"))
 
   result_note <- c(
     "# CellChat 分析结果",
@@ -384,7 +407,9 @@ if (analysis_mode == "single") {
     "- 分析模式：单样本",
     paste0("- 样本：", dataset_name),
     paste0("- 细胞类型列：", celltype_col),
-    paste0("- 配体-受体表：tables/", safe_name(dataset_name), "_ligand_receptor.csv")
+    paste0("- 配体-受体表：", safe_name(dataset_name), "_ligand_receptor.csv"),
+    paste0("- CellChat 对象：", file.path(object_dir, "cellchat_object.rds")),
+    "- CellChat 的概率和置换显著性基于细胞层面；不能代替生物学重复层面的条件检验。"
   )
 } else {
   # 双样本和多样本模式共用同一套推断；multi 会自动生成全部两两比较。
@@ -421,8 +446,8 @@ if (analysis_mode == "single") {
     cell.prefix = TRUE
   )
 
-  saveRDS(cellchat_list, file.path(output_dir, "cellchat_objects_by_group.rds"))
-  saveRDS(merged_cellchat, file.path(output_dir, "cellchat_merged.rds"))
+  saveRDS(cellchat_list, file.path(object_dir, "cellchat_objects_by_group.rds"))
+  saveRDS(merged_cellchat, file.path(object_dir, "cellchat_merged.rds"))
 
   combined_communication <- do.call(
     rbind,
@@ -446,7 +471,10 @@ if (analysis_mode == "single") {
     paste0("- 分析模式：", ifelse(analysis_mode == "two", "双样本比较", "多样本比较")),
     paste0("- 比较顺序：", paste(names(cellchat_list), collapse = " → ")),
     paste0("- 共同细胞类型：", paste(shared_celltypes, collapse = ", ")),
-    "- 差异图命名为 第二组_vs_第一组；红色表示第二组增强，蓝色表示第一组增强。"
+    "- 差异图命名为 第二组_vs_第一组；红色表示第二组增强，蓝色表示第一组增强。",
+    paste0("- 分组对象：", file.path(object_dir, "cellchat_objects_by_group.rds")),
+    paste0("- 合并对象：", file.path(object_dir, "cellchat_merged.rds")),
+    "- 网络差异图是数据集间描述性比较；正式 CON/EXP 推断应在生物学样本层面复核。"
   )
 }
 
@@ -454,4 +482,5 @@ writeLines(result_note, file.path(output_dir, "README_results_CN.md"))
 capture.output(sessionInfo(), file = file.path(output_dir, "sessionInfo.txt"))
 future::plan("sequential")
 
-message("CellChat analysis completed: ", normalizePath(output_dir))
+message("CellChat results: ", normalizePath(output_dir))
+message("CellChat objects: ", normalizePath(object_dir))

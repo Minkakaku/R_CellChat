@@ -2,3 +2,5 @@
 .RData
 .Rproj.user/
 cellchat_results/
+results/
+data/processed/
