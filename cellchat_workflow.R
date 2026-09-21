@@ -9,6 +9,20 @@ suppressPackageStartupMessages({
   library(Seurat)
 })
 
+NPG_COLORS <- c(
+  "#E64B35", "#4DBBD5", "#00A087", "#3C5488", "#F39B7F",
+  "#8491B4", "#91D1C2", "#DC0000", "#7E6148", "#B09C85"
+)
+npg_palette <- function(labels) {
+  colors <- NPG_COLORS
+  if (length(labels) > length(colors)) {
+    extra_n <- length(labels) - length(colors)
+    extra <- grDevices::colorRampPalette(NPG_COLORS)(2L * extra_n + 1L)[seq.int(2L, 2L * extra_n, by = 2L)]
+    colors <- c(colors, extra)
+  }
+  stats::setNames(colors[seq_along(labels)], labels)
+}
+
 # 功能：读取 --name value 形式的命令行参数。
 arg_value <- function(name, default = NULL) {
   args <- commandArgs(trailingOnly = TRUE)
@@ -48,7 +62,7 @@ database_categories <- c(
 )
 
 # ------------------------------------------------------------------------------
-# 2. 输出函数：所有主要图同时保存为 PDF 和 300 dpi PNG
+# 2. 输出函数：所有主要图同时保存为 PDF 和 600 dpi PNG
 # ------------------------------------------------------------------------------
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -61,10 +75,11 @@ safe_name <- function(x) {
   gsub("[^A-Za-z0-9._-]", "_", x)
 }
 
-# 功能：把 ggplot 同时保存为矢量 PDF 和 300 dpi PNG（函数：save_ggplot）。
+# 功能：把 ggplot 同时保存为矢量 PDF 和 600 dpi PNG（函数：save_ggplot）。
 save_ggplot <- function(plot, stem, width = 8, height = 6) {
+  plot <- plot + ggplot2::labs(subtitle = NULL) + ggplot2::theme(plot.subtitle = ggplot2::element_blank())
   ggsave(paste0(stem, ".pdf"), plot, width = width, height = height)
-  ggsave(paste0(stem, ".png"), plot, width = width, height = height, dpi = 300)
+  ggsave(paste0(stem, ".png"), plot, width = width, height = height, dpi = 600)
 }
 
 # 功能：把基础绘图或 ComplexHeatmap 同时保存为 PDF 和 PNG（函数：save_draw）。
@@ -73,7 +88,7 @@ save_draw <- function(draw_fun, stem, width = 8, height = 7) {
   draw_fun()
   dev.off()
 
-  png(paste0(stem, ".png"), width = width, height = height, units = "in", res = 300)
+  png(paste0(stem, ".png"), width = width, height = height, units = "in", res = 600)
   draw_fun()
   dev.off()
 }
@@ -169,7 +184,7 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
   dir.create(out, showWarnings = FALSE)
 
   celltypes <- levels(cellchat@idents)
-  celltype_colors <- setNames(hcl.colors(length(celltypes), "Dark 3"), celltypes)
+  celltype_colors <- npg_palette(celltypes)
   group_size <- as.numeric(table(cellchat@idents))
 
   # 全局通讯数量网络。
@@ -182,7 +197,7 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
         color.use = celltype_colors,
         weight.scale = TRUE,
         label.edge = FALSE,
-        title.name = paste0(dataset_name, " - interaction count")
+        title.name = NULL
       )
     },
     file.path(out, "01_network_count")
@@ -198,7 +213,7 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
         color.use = celltype_colors,
         weight.scale = TRUE,
         label.edge = FALSE,
-        title.name = paste0(dataset_name, " - interaction strength")
+        title.name = NULL
       )
     },
     file.path(out, "02_network_weight")
@@ -207,13 +222,13 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
   # 细胞类型之间通讯数量和强度热图。
   save_draw(
     function() ComplexHeatmap::draw(
-      netVisual_heatmap(cellchat, measure = "count", color.heatmap = "Reds")
+      netVisual_heatmap(cellchat, measure = "count", color.heatmap = c("#FFF5F0", "#E64B35"))
     ),
     file.path(out, "03_heatmap_count")
   )
   save_draw(
     function() ComplexHeatmap::draw(
-      netVisual_heatmap(cellchat, measure = "weight", color.heatmap = "Reds")
+      netVisual_heatmap(cellchat, measure = "weight", color.heatmap = c("#FFF5F0", "#E64B35"))
     ),
     file.path(out, "04_heatmap_weight")
   )
@@ -250,7 +265,7 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
   out <- file.path(plot_dir, "comparison")
   dir.create(out, showWarnings = FALSE)
 
-  dataset_colors <- setNames(hcl.colors(length(groups), "Dark 3"), groups)
+  dataset_colors <- npg_palette(groups)
   if ("CON" %in% groups) dataset_colors["CON"] <- "#72b1b9"
   if ("EXP" %in% groups) dataset_colors["EXP"] <- "#f6ae00"
 
@@ -309,7 +324,7 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
             merged_cellchat,
             comparison = c(reference, experiment),
             measure = "count",
-            color.heatmap = c("#2166AC", "#B2182B")
+            color.heatmap = c("#3C5488", "#E64B35")
           )
         ),
         file.path(pair_out, "05_difference_heatmap_count")
@@ -322,7 +337,7 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
             merged_cellchat,
             comparison = c(reference, experiment),
             measure = "weight",
-            color.heatmap = c("#2166AC", "#B2182B")
+            color.heatmap = c("#3C5488", "#E64B35")
           )
         ),
         file.path(pair_out, "06_difference_heatmap_weight")

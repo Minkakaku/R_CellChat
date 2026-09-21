@@ -22,7 +22,7 @@
 
     Rscript cellchat_workflow.R --input annotated.rds --output results/cellchat --mode multi --sample-col orig.ident --samples S1,S2,S3
 
-可通过 --object-dir 指定 CellChat RDS；默认和表格、图、README_results_CN.md 一起放在输出目录。最终图同时保存 PDF 和 300 dpi PNG。
+可通过 --object-dir 指定 CellChat RDS；默认和表格、图、README_results_CN.md 一起放在输出目录。最终图同时保存 PDF 和 600 dpi PNG。
 
 ## 解释边界
 
