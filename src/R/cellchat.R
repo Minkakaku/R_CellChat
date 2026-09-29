@@ -1,3 +1,6 @@
+# 公共 CellChat 方法：所有项目参数从 config 传入。
+run_cellchat_analysis <- function(config) {
+  list2env(config, envir = environment())
 # ==============================================================================
 # CellChat 完整分析脚本
 #
@@ -20,36 +23,12 @@ suppressPackageStartupMessages({
 # 1. 参数区：新项目通常只需要修改这里
 # ------------------------------------------------------------------------------
 
-input_rds <- "path/to/seurat_object.rds"
-output_dir <- "cellchat_results"
-
-species <- "human"                 # human 或 mouse
-assay <- "RNA"                     # CellChat 使用的 Seurat assay
-celltype_col <- "cell_type"        # 细胞类型注释列
-
-analysis_mode <- "two"             # single、two 或 multi
-sample_col <- "group"              # 样本/分组所在的 metadata 列
-samples <- c("CON", "EXP")         # single 填 1 个，two 填 2 个，multi 填 3 个以上
-
-min_cells <- 10
-workers <- 4
-prob_type <- "triMean"
-population_size <- TRUE
-smooth_ppi <- FALSE
-seed <- 123
-
-# 使用 CellChatDB 的三类主要配体-受体互作。
-database_categories <- c(
-  "Secreted Signaling",
-  "ECM-Receptor",
-  "Cell-Cell Contact"
-)
-
 # ------------------------------------------------------------------------------
 # 2. 输出函数：所有主要图同时保存为 PDF 和 300 dpi PNG
 # ------------------------------------------------------------------------------
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(object_dir, recursive = TRUE, showWarnings = FALSE)
 table_dir <- file.path(output_dir, "tables")
 plot_dir <- file.path(output_dir, "plots")
 dir.create(table_dir, showWarnings = FALSE)
@@ -376,7 +355,7 @@ if (analysis_mode == "single") {
   }
 
   cellchat_list <- setNames(list(run_cellchat(seurat_obj, dataset_name)), dataset_name)
-  saveRDS(cellchat_list[[1]], file.path(output_dir, "cellchat_object.rds"))
+  saveRDS(cellchat_list[[1]], file.path(object_dir, "cellchat_object.rds"))
 
   result_note <- c(
     "# CellChat 分析结果",
@@ -421,8 +400,8 @@ if (analysis_mode == "single") {
     cell.prefix = TRUE
   )
 
-  saveRDS(cellchat_list, file.path(output_dir, "cellchat_objects_by_group.rds"))
-  saveRDS(merged_cellchat, file.path(output_dir, "cellchat_merged.rds"))
+  saveRDS(cellchat_list, file.path(object_dir, "cellchat_objects_by_group.rds"))
+  saveRDS(merged_cellchat, file.path(object_dir, "cellchat_merged.rds"))
 
   combined_communication <- do.call(
     rbind,
@@ -455,3 +434,5 @@ capture.output(sessionInfo(), file = file.path(output_dir, "sessionInfo.txt"))
 future::plan("sequential")
 
 message("CellChat analysis completed: ", normalizePath(output_dir))
+
+}

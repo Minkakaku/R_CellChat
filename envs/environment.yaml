@@ -1,0 +1,11 @@
+name: r-cellchat
+channels: [conda-forge, bioconda]
+dependencies:
+  - r-base>=4.3
+  - r-yaml
+  - r-seurat>=5
+  - r-ggplot2
+  - r-future
+  - r-remotes
+  - bioconductor-complexheatmap
+# CellChat 按其官方说明单独安装；保留实际使用版本。

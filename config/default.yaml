@@ -1,0 +1,18 @@
+species: human
+assay: RNA
+celltype_col: cell_type
+analysis_mode: two
+sample_col: group
+samples:
+- CON
+- EXP
+min_cells: 10
+workers: 4
+prob_type: triMean
+population_size: true
+smooth_ppi: false
+seed: 123
+database_categories:
+- Secreted Signaling
+- ECM-Receptor
+- Cell-Cell Contact

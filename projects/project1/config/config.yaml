@@ -1,0 +1,6 @@
+input_rds: data/processed/annotated.rds
+output_dir: results/10_cellchat
+object_dir: data/processed/10_cellchat
+samples:
+- CON
+- EXP

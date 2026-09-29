@@ -1,0 +1,5 @@
+source("src/R/cellchat.R")
+stopifnot(is.function(run_cellchat_analysis))
+status <- system2("Rscript", c("projects/project1/workflow/10_cellchat.R", "--dry-run"), stdout = TRUE)
+stopifnot(any(grepl("data/processed", status)))
+cat("CellChat safe import and configured paths passed\n")
