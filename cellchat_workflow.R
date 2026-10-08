@@ -1,5 +1,6 @@
 # CellChat 独立分析入口
-# single、two、multi 共用一个完整脚本，直接接收主 Seurat 流程输出的 RDS。
+# 来源：R-cellchat-workflow-template 当前公共脚本；适配工作区 QS2、集中README及可恢复运行。
+# single、two、multi 共用一个完整脚本，直接接收主 Seurat 流程输出的 RDS/QS2。
 
 suppressPackageStartupMessages({
   library(CellChat)
@@ -24,10 +25,14 @@ npg_palette <- function(labels) {
 }
 
 # 功能：读取 --name value 形式的命令行参数。
+settings <- list()
 arg_value <- function(name, default = NULL) {
   args <- commandArgs(trailingOnly = TRUE)
   index <- match(name, args)
-  if (is.na(index) || index == length(args)) default else args[[index + 1L]]
+  key <- sub("^--", "", name)
+  if (is.na(index) || index == length(args)) {
+    if (!is.null(settings[[key]])) settings[[key]] else default
+  } else args[[index + 1L]]
 }
 
 # 功能：解析逗号分隔的样本或条件名称。
@@ -35,6 +40,8 @@ split_values <- function(x) {
   if (is.null(x) || x == "") character(0) else trimws(strsplit(x, ",", fixed = TRUE)[[1]])
 }
 
+config_file <- arg_value("--config")
+if (!is.null(config_file)) settings <- source(config_file, local = TRUE)$value
 input_rds <- arg_value("--input")
 output_dir <- arg_value("--output")
 analysis_mode <- arg_value("--mode", "single")
@@ -53,6 +60,16 @@ prob_type <- arg_value("--prob-type", "triMean")
 population_size <- as.logical(arg_value("--population-size", "TRUE"))
 smooth_ppi <- as.logical(arg_value("--smooth-ppi", "FALSE"))
 seed <- as.integer(arg_value("--seed", "123"))
+nboot <- as.integer(arg_value("--nboot", "100"))
+normalize_rna <- as.logical(arg_value("--normalize", "FALSE"))
+resume <- as.logical(arg_value("--resume", "FALSE"))
+top_lr <- as.integer(arg_value("--top-lr", "30"))
+plot_stems <- split_values(arg_value("--plot-stems", ""))
+write_note <- as.logical(arg_value("--write-note", "TRUE"))
+session_path <- arg_value("--session-file", file.path(output_dir, "sessionInfo.txt"))
+group_colors <- split_values(arg_value("--group-colors", ""))
+stopifnot(min_cells >= 1L, workers >= 1L, nboot >= 1L, top_lr >= 1L)
+options(future.globals.maxSize = 8 * 1024^3)
 
 # 使用 CellChatDB 的三类主要配体-受体互作。
 database_categories <- c(
@@ -77,13 +94,22 @@ safe_name <- function(x) {
 
 # 功能：把 ggplot 同时保存为矢量 PDF 和 600 dpi PNG（函数：save_ggplot）。
 save_ggplot <- function(plot, stem, width = 8, height = 6) {
+  if (length(plot_stems) && !basename(stem) %in% plot_stems) return(invisible(NULL))
   plot <- plot + ggplot2::labs(subtitle = NULL) + ggplot2::theme(plot.subtitle = ggplot2::element_blank())
-  ggsave(paste0(stem, ".pdf"), plot, width = width, height = height)
-  ggsave(paste0(stem, ".png"), plot, width = width, height = height, dpi = 600)
+  ggsave(paste0(stem, ".pdf"), plot, width = width, height = height, limitsize = FALSE, bg = "white")
+  ggsave(paste0(stem, ".png"), plot, width = width, height = height, dpi = 600, limitsize = FALSE, bg = "white")
+}
+
+# CellChat 的气泡图只接受内置 palette 名；保留其概率尺度/图例，仅替换颜色函数。
+style_cellchat_bubble <- function(plot) {
+  colour_scale <- plot$scales$get_scales("colour")
+  colour_scale$palette <- scales::gradient_n_pal(c("#FFF5F0", "#F39B7F", "#E64B35", "#7A0019"))
+  plot + guides(color = guide_colorbar(display = "rectangles"))
 }
 
 # 功能：把基础绘图或 ComplexHeatmap 同时保存为 PDF 和 PNG（函数：save_draw）。
 save_draw <- function(draw_fun, stem, width = 8, height = 7) {
+  if (length(plot_stems) && !basename(stem) %in% plot_stems) return(invisible(NULL))
   pdf(paste0(stem, ".pdf"), width = width, height = height)
   draw_fun()
   dev.off()
@@ -106,11 +132,26 @@ has_network_difference <- function(cellchat, pair, measure) {
 # 功能：对一个数据集完成 CellChat 配体-受体通讯推断（函数：run_cellchat）。
 run_cellchat <- function(seurat_obj, dataset_name) {
   message("Running CellChat: ", dataset_name)
+  label <- safe_name(dataset_name)
+  cache_path <- file.path(object_dir, paste0("cellchat_", label, ".rds"))
+  cache_key <- digest::digest(list(input = normalizePath(input_rds),
+    source = file.info(input_rds)[, c("size", "mtime")], cells = colnames(seurat_obj),
+    metadata = seurat_obj[[]], CellChat = as.character(packageVersion("CellChat")),
+    parameters = list(species, assay, celltype_col, min_cells, prob_type, population_size,
+      smooth_ppi, seed, nboot, normalize_rna, database_categories)))
+  if (resume && file.exists(cache_path)) {
+    cached <- readRDS(cache_path)
+    if (!identical(cached@options$workspace_cache_key, cache_key)) stop("Cached inputs/parameters differ: ", cache_path)
+    message("Reusing verified inference cache: ", dataset_name)
+    plot_single_cellchat(cached, dataset_name)
+    return(cached)
+  }
 
   # 将真实细胞类型作为通讯网络节点，不使用技术性 cluster 编号。
   seurat_obj@meta.data[[celltype_col]] <- factor(seurat_obj@meta.data[[celltype_col]])
   seurat_obj <- SeuratObject::JoinLayers(seurat_obj, assay = assay)
-  seurat_obj@meta.data$samples <- factor(dataset_name)
+  if (!"samples" %in% names(seurat_obj@meta.data)) seurat_obj@meta.data$samples <- dataset_name
+  seurat_obj@meta.data$samples <- factor(seurat_obj@meta.data$samples)
   Idents(seurat_obj) <- seurat_obj@meta.data[[celltype_col]]
 
   cellchat <- createCellChat(
@@ -148,14 +189,19 @@ run_cellchat <- function(seurat_obj, dataset_name) {
     cellchat,
     type = prob_type,
     raw.use = !smooth_ppi,
-    population.size = population_size
+    population.size = population_size,
+    nboot = nboot,
+    seed.use = seed
   )
   cellchat <- filterCommunication(cellchat, min.cells = min_cells)
   cellchat <- computeCommunProbPathway(cellchat)
   cellchat <- aggregateNet(cellchat)
   cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
 
-  label <- safe_name(dataset_name)
+  cellchat@options$workspace_cache_key <- cache_key
+  saveRDS(cellchat, cache_path)
+  message("INFERENCE_OK ", dataset_name, ": ", ncol(seurat_obj), " cells; ",
+    length(cellchat@netP$pathways), " pathways; ", sum(cellchat@net$count), " significant edges")
 
   # 导出配体-受体层面和通路层面的通讯表。
   write.csv(
@@ -222,34 +268,55 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
   # 细胞类型之间通讯数量和强度热图。
   save_draw(
     function() ComplexHeatmap::draw(
-      netVisual_heatmap(cellchat, measure = "count", color.heatmap = c("#FFF5F0", "#E64B35"))
+      netVisual_heatmap(cellchat, measure = "count", color.use = celltype_colors,
+        color.heatmap = c("#FFF5F0", "#E64B35"))
     ),
     file.path(out, "03_heatmap_count")
   )
   save_draw(
     function() ComplexHeatmap::draw(
-      netVisual_heatmap(cellchat, measure = "weight", color.heatmap = c("#FFF5F0", "#E64B35"))
+      netVisual_heatmap(cellchat, measure = "weight", color.use = celltype_colors,
+        color.heatmap = c("#FFF5F0", "#E64B35"))
     ),
     file.path(out, "04_heatmap_weight")
   )
 
   # 配体-受体气泡图。
-  bubble <- netVisual_bubble(cellchat, remove.isolate = FALSE, angle.x = 45)
-  save_ggplot(bubble, file.path(out, "05_ligand_receptor_bubble"), 10, 8)
+  lr <- subsetCommunication(cellchat)
+  ranked <- sort(tapply(lr$prob, lr$interaction_name, sum), decreasing = TRUE)
+  selected <- data.frame(interaction_name = head(names(ranked), top_lr))
+  bubble <- netVisual_bubble(cellchat, pairLR.use = selected, remove.isolate = TRUE, angle.x = 90,
+    grid.on = FALSE)
+  bubble <- style_cellchat_bubble(bubble)
+  save_ggplot(bubble, file.path(out, paste0("05_top", top_lr, "_ligand_receptor_bubble")), 26, 11)
 
   # 发送和接收信号的中心性散点图。
-  role_scatter <- netAnalysis_signalingRole_scatter(cellchat)
+  role_scatter <- netAnalysis_signalingRole_scatter(cellchat, color.use = celltype_colors,
+    do.label = FALSE) + ggrepel::geom_text_repel(ggplot2::aes(label = labels),
+      color = "black", size = 3, seed = seed, max.overlaps = Inf,
+      box.padding = 0.5, point.padding = 0.3, min.segment.length = 0,
+      show.legend = FALSE) +
+    scale_x_continuous(expand = expansion(mult = c(0.12, 0.15))) +
+    scale_y_continuous(expand = expansion(mult = c(0.12, 0.15)))
   save_ggplot(role_scatter, file.path(out, "06_signaling_role_scatter"), 7, 6)
 
   # 通路层面的 outgoing / incoming 信号热图。
-  heatmap_height <- min(18, max(6, length(cellchat@netP$pathways) * 0.24))
+  # CellChat内部height单位为cm；仅放大外层画布不会展开通路行。
+  body_height_cm <- max(8, length(cellchat@netP$pathways) * 0.34)
+  heatmap_height <- body_height_cm / 2.54 + 3.2
   for (pattern in c("outgoing", "incoming")) {
     save_draw(
-      function() ComplexHeatmap::draw(
-        netAnalysis_signalingRole_heatmap(cellchat, pattern = pattern)
-      ),
+      function() {
+        ht <- netAnalysis_signalingRole_heatmap(cellchat, pattern = pattern,
+          color.use = celltype_colors, color.heatmap = "Reds",
+          width = 12, height = body_height_cm, font.size = 8)
+        ht@matrix_color_mapping <- ComplexHeatmap::ColorMapping(
+          name = "Relative strength", col_fun = circlize::colorRamp2(
+            c(0, 0.5, 1), c("#FFF5F0", "#F39B7F", "#E64B35")))
+        ComplexHeatmap::draw(ht)
+      },
       file.path(out, paste0("07_signaling_role_", pattern)),
-      width = 9,
+      width = 8,
       height = heatmap_height
     )
   }
@@ -266,21 +333,25 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
   dir.create(out, showWarnings = FALSE)
 
   dataset_colors <- npg_palette(groups)
-  if ("CON" %in% groups) dataset_colors["CON"] <- "#72b1b9"
-  if ("EXP" %in% groups) dataset_colors["EXP"] <- "#f6ae00"
+  if (length(group_colors)) {
+    stopifnot(length(group_colors) == length(groups))
+    dataset_colors <- setNames(group_colors, groups)
+  }
 
   # 总通讯数量和总通讯强度比较。
   p_count <- compareInteractions(
     merged_cellchat,
-    show.legend = TRUE,
-    group = seq_along(groups),
+    show.legend = FALSE,
+    group = groups,
+    group.levels = groups,
     measure = "count",
     color.use = unname(dataset_colors)
   )
   p_weight <- compareInteractions(
     merged_cellchat,
-    show.legend = TRUE,
-    group = seq_along(groups),
+    show.legend = FALSE,
+    group = groups,
+    group.levels = groups,
     measure = "weight",
     color.use = unname(dataset_colors)
   )
@@ -302,6 +373,8 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
         merged_cellchat,
         comparison = c(reference, experiment),
         weight.scale = TRUE,
+        color.use = npg_palette(levels(cellchat_list[[reference]]@idents)),
+        color.edge = c("#E64B35", "#3C5488"),
         measure = "count"
       ),
       file.path(pair_out, "03_difference_count")
@@ -311,6 +384,8 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
         merged_cellchat,
         comparison = c(reference, experiment),
         weight.scale = TRUE,
+        color.use = npg_palette(levels(cellchat_list[[reference]]@idents)),
+        color.edge = c("#E64B35", "#3C5488"),
         measure = "weight"
       ),
       file.path(pair_out, "04_difference_weight")
@@ -324,6 +399,7 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
             merged_cellchat,
             comparison = c(reference, experiment),
             measure = "count",
+            color.use = npg_palette(levels(cellchat_list[[reference]]@idents)),
             color.heatmap = c("#3C5488", "#E64B35")
           )
         ),
@@ -337,6 +413,7 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
             merged_cellchat,
             comparison = c(reference, experiment),
             measure = "weight",
+            color.use = npg_palette(levels(cellchat_list[[reference]]@idents)),
             color.heatmap = c("#3C5488", "#E64B35")
           )
         ),
@@ -345,13 +422,20 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
     }
 
     # 比较两组的配体-受体互作和通路信息流。
+    lr <- do.call(rbind, lapply(cellchat_list[pair], subsetCommunication))
+    ranked <- sort(tapply(lr$prob, lr$interaction_name, sum), decreasing = TRUE)
+    selected <- data.frame(interaction_name = head(names(ranked), top_lr))
     bubble <- netVisual_bubble(
       merged_cellchat,
       comparison = c(reference, experiment),
-      remove.isolate = FALSE,
-      angle.x = 45
+      pairLR.use = selected,
+      remove.isolate = TRUE,
+      angle.x = 90,
+      color.text = unname(dataset_colors[pair]),
+      grid.on = FALSE
     )
-    save_ggplot(bubble, file.path(pair_out, "07_ligand_receptor_bubble"), 11, 8)
+    bubble <- style_cellchat_bubble(bubble)
+    save_ggplot(bubble, file.path(pair_out, paste0("07_top", top_lr, "_ligand_receptor_bubble")), 40, 11)
 
     rank_count <- rankNet(
       merged_cellchat,
@@ -359,7 +443,8 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
       comparison = c(reference, experiment),
       measure = "count",
       stacked = TRUE,
-      do.stat = TRUE
+      do.stat = FALSE,
+      color.use = unname(dataset_colors)
     )
     rank_weight <- rankNet(
       merged_cellchat,
@@ -367,10 +452,12 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
       comparison = c(reference, experiment),
       measure = "weight",
       stacked = TRUE,
-      do.stat = TRUE
+      do.stat = FALSE,
+      color.use = unname(dataset_colors)
     )
-    save_ggplot(rank_count, file.path(pair_out, "08_information_flow_count"), 8, 7)
-    save_ggplot(rank_weight, file.path(pair_out, "09_information_flow_weight"), 8, 7)
+    flow_height <- max(7, length(unique(unlist(lapply(cellchat_list[pair], function(x) x@netP$pathways)))) * 0.18 + 1)
+    save_ggplot(rank_count, file.path(pair_out, "08_information_flow_count"), 8, flow_height)
+    save_ggplot(rank_weight, file.path(pair_out, "09_information_flow_weight"), 8, flow_height)
   }
 }
 
@@ -378,11 +465,44 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
 # 6. 主流程
 # ------------------------------------------------------------------------------
 
-set.seed(seed)
-future::plan("multisession", workers = workers)
+# 仅重绘已完成的分组模型，不重读Seurat、不重新推断或改写模型。
+if (identical(arg_value("--stage", "all"), "plot")) {
+  stopifnot(length(samples) >= 2L)
+  cellchat_list <- setNames(lapply(samples, function(group) {
+    x <- readRDS(file.path(object_dir, paste0("cellchat_", safe_name(group), ".rds")))
+    stopifnot(all(as.character(x@meta[[sample_col]]) == group),
+      identical(x@options$mode, "single"), length(x@netP$pathways) > 0L)
+    plot_single_cellchat(x, group)
+    x
+  }), samples)
+  merged_cellchat <- readRDS(file.path(object_dir, "cellchat_merged.rds"))
+  stopifnot(identical(names(merged_cellchat@net), samples))
+  plot_cellchat_comparison(cellchat_list, merged_cellchat)
+  message("CELLCHAT_REPLOT_OK: ", normalizePath(output_dir))
+  quit(save = "no", status = 0L)
+}
 
-seurat_obj <- readRDS(input_rds)
+set.seed(seed)
+# 大型 RNA 标准化保持串行，避免 Seurat 闭包向并行进程重复发送完整表达对象。
+future::plan("sequential")
+
+seurat_obj <- if (grepl("[.]qs2$", input_rds, ignore.case = TRUE)) qs2::qs_read(input_rds) else readRDS(input_rds)
 stopifnot(celltype_col %in% colnames(seurat_obj@meta.data))
+# 只保留通讯所需 RNA，释放全局 SCT/integrated 大矩阵；只改内存副本。
+DefaultAssay(seurat_obj) <- assay
+seurat_obj@assays <- seurat_obj@assays[assay]
+seurat_obj@reductions <- list(); seurat_obj@graphs <- list(); seurat_obj@neighbors <- list()
+gc(verbose = FALSE)
+seurat_obj <- SeuratObject::JoinLayers(seurat_obj, assay = assay)
+if (normalize_rna) seurat_obj <- NormalizeData(seurat_obj, assay = assay,
+  normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+expression <- GetAssayData(seurat_obj, assay = assay, layer = "data")
+stopifnot(nrow(expression) > 0, ncol(expression) == ncol(seurat_obj),
+  all(is.finite(expression@x)), all(expression@x >= 0), max(expression@x) > 0)
+rm(expression)
+message("INPUT_OK: ", ncol(seurat_obj), " cells; assay=", assay, "; RNA LogNormalize=", normalize_rna)
+print(table(seurat_obj[[celltype_col, drop = TRUE]], seurat_obj[[sample_col, drop = TRUE]]))
+if (workers > 1L) future::plan("multisession", workers = workers)
 
 analysis_mode <- match.arg(tolower(analysis_mode), c("single", "two", "multi"))
 
@@ -446,22 +566,7 @@ if (analysis_mode == "single") {
     cell.prefix = TRUE
   )
 
-  saveRDS(cellchat_list, file.path(object_dir, "cellchat_objects_by_group.rds"))
   saveRDS(merged_cellchat, file.path(object_dir, "cellchat_merged.rds"))
-
-  combined_communication <- do.call(
-    rbind,
-    lapply(names(cellchat_list), function(group) {
-      data <- subsetCommunication(cellchat_list[[group]])
-      data$dataset <- group
-      data
-    })
-  )
-  write.csv(
-    combined_communication,
-    file.path(table_dir, "all_groups_ligand_receptor.csv"),
-    row.names = FALSE
-  )
 
   plot_cellchat_comparison(cellchat_list, merged_cellchat)
 
@@ -472,14 +577,15 @@ if (analysis_mode == "single") {
     paste0("- 比较顺序：", paste(names(cellchat_list), collapse = " → ")),
     paste0("- 共同细胞类型：", paste(shared_celltypes, collapse = ", ")),
     "- 差异图命名为 第二组_vs_第一组；红色表示第二组增强，蓝色表示第一组增强。",
-    paste0("- 分组对象：", file.path(object_dir, "cellchat_objects_by_group.rds")),
+    paste0("- 分组对象：", paste(file.path(object_dir,
+      paste0("cellchat_", safe_name(names(cellchat_list)), ".rds")), collapse = ", ")),
     paste0("- 合并对象：", file.path(object_dir, "cellchat_merged.rds")),
     "- 网络差异图是数据集间描述性比较；正式 CON/EXP 推断应在生物学样本层面复核。"
   )
 }
 
-writeLines(result_note, file.path(output_dir, "README_results_CN.md"))
-capture.output(sessionInfo(), file = file.path(output_dir, "sessionInfo.txt"))
+if (write_note) writeLines(result_note, file.path(output_dir, "README_results_CN.md"))
+capture.output(sessionInfo(), file = session_path)
 future::plan("sequential")
 
 message("CellChat results: ", normalizePath(output_dir))
