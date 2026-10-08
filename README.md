@@ -36,6 +36,6 @@ CellChat 根据配体/受体表达和数据库先验推断通讯概率。两组�
 
 `--stage plot --samples CON,EXP --object-dir <缓存目录>` 只读取 `cellchat_<组>.rds` 和 `cellchat_merged.rds` 重绘，不重做推断；仍需填写 `--input` 与 `--output`。`--top-lr` 默认 30，`--plot-stems` 可选图名，`--group-colors` 按 samples 顺序传逗号分隔颜色。`--write-note FALSE` 适合集中维护项目说明，`--session-file` 指定会话记录路径。
 
-与早期模板的输出差异：保留每组模型、合并模型、每组 LR/通路 CSV；不再额外输出模型列表 RDS 或所有组拼接 LR CSV。默认数据集配色使用 NPG；需要 CON/EXP 固定颜色时显式传 `--group-colors '#72b1b9,#f6ae00'`。rankNet 关闭细胞层面的组间显著性检验，仍只作描述性网络比较。
+与早期模板的输出差异：保留每组模型、合并模型、每组 LR/通路 CSV；不再额外输出模型列表 RDS 或所有组拼接 LR CSV。默认数据集配色使用 NPG；需要 CON/EXP 固定颜色时显式传 `--group-colors '#E64B35,#4DBBD5'`。rankNet 关闭细胞层面的组间显著性检验，仍只作描述性网络比较。
 
 本版本与实际工作区的公共脚本逐字节一致，保留其项目已记录的脚本哈希；同步不会修改项目执行历史。
