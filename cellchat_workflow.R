@@ -286,7 +286,7 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
   ranked <- sort(tapply(lr$prob, lr$interaction_name, sum), decreasing = TRUE)
   selected <- data.frame(interaction_name = head(names(ranked), top_lr))
   bubble <- netVisual_bubble(cellchat, pairLR.use = selected, remove.isolate = TRUE, angle.x = 90,
-    grid.on = FALSE)
+    grid.on = FALSE, line.on = FALSE)
   bubble <- style_cellchat_bubble(bubble)
   save_ggplot(bubble, file.path(out, paste0("05_top", top_lr, "_ligand_receptor_bubble")), 26, 11)
 
@@ -432,7 +432,8 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
       remove.isolate = TRUE,
       angle.x = 90,
       color.text = unname(dataset_colors[pair]),
-      grid.on = FALSE
+      grid.on = FALSE,
+      line.on = FALSE
     )
     bubble <- style_cellchat_bubble(bubble)
     save_ggplot(bubble, file.path(pair_out, paste0("07_top", top_lr, "_ligand_receptor_bubble")), 40, 11)
