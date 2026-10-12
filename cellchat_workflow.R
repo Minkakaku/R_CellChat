@@ -64,6 +64,8 @@ nboot <- as.integer(arg_value("--nboot", "100"))
 normalize_rna <- as.logical(arg_value("--normalize", "FALSE"))
 resume <- as.logical(arg_value("--resume", "FALSE"))
 top_lr <- as.integer(arg_value("--top-lr", "30"))
+celltypes <- split_values(arg_value("--celltypes", ""))
+sender_networks <- as.logical(arg_value("--sender-networks", "FALSE"))
 plot_stems <- split_values(arg_value("--plot-stems", ""))
 write_note <- as.logical(arg_value("--write-note", "TRUE"))
 session_path <- arg_value("--session-file", file.path(output_dir, "sessionInfo.txt"))
@@ -123,6 +125,49 @@ save_draw <- function(draw_fun, stem, width = 8, height = 7) {
 has_network_difference <- function(cellchat, pair, measure) {
   difference <- cellchat@net[[pair[2]]][[measure]] - cellchat@net[[pair[1]]][[measure]]
   any(difference != 0)
+}
+
+# 保留一个发送细胞类型的原始边权，其他行置零，节点顺序及数值不变。
+sender_network_matrix <- function(mat, sender) {
+  stopifnot(is.matrix(mat), sender %in% rownames(mat), all(is.finite(mat)))
+  selected <- mat
+  selected[,] <- 0
+  selected[sender,] <- mat[sender,]
+  selected
+}
+
+# 长表按 source/target 精确对应数量和强度，供新增网络图复核与再绘。
+communication_network_table <- function(net) {
+  stopifnot(identical(dim(net$count), dim(net$weight)),
+    identical(dimnames(net$count), dimnames(net$weight)))
+  table <- expand.grid(source = rownames(net$count), target = colnames(net$count),
+    stringsAsFactors = FALSE)
+  table$count <- as.vector(net$count)
+  table$weight <- as.vector(net$weight)
+  table
+}
+
+# 各发送者使用同一组网络最大边权；PNG/PDF 复用现有输出函数。
+plot_sender_networks <- function(cellchat, out) {
+  labels <- rownames(cellchat@net$count)
+  colors <- npg_palette(labels)
+  sizes <- as.numeric(table(cellchat@idents)[labels])
+  ncols <- min(3L, length(labels))
+  nrows <- ceiling(length(labels) / ncols)
+  write.csv(communication_network_table(cellchat@net),
+    file.path(out, "sender_network_edges.csv"), row.names = FALSE)
+  for (measure in c("count", "weight")) {
+    mat <- cellchat@net[[measure]]
+    if (max(mat) <= 0) next
+    save_draw(function() {
+      par(mfrow = c(nrows, ncols), mar = c(0.5, 0.5, 2, 0.5), xpd = TRUE)
+      for (sender in labels) {
+        netVisual_circle(sender_network_matrix(mat, sender), vertex.weight = sizes,
+          color.use = colors, weight.scale = TRUE, edge.weight.max = max(mat),
+          label.edge = FALSE, title.name = sender)
+      }
+    }, file.path(out, paste0("08_sender_network_", measure)), width = 5 * ncols, height = 5 * nrows)
+  }
 }
 
 # ------------------------------------------------------------------------------
@@ -228,6 +273,8 @@ plot_single_cellchat <- function(cellchat, dataset_name) {
   label <- safe_name(dataset_name)
   out <- file.path(plot_dir, label)
   dir.create(out, showWarnings = FALSE)
+
+  if (sender_networks) plot_sender_networks(cellchat, out)
 
   celltypes <- levels(cellchat@idents)
   celltype_colors <- npg_palette(celltypes)
@@ -489,6 +536,13 @@ future::plan("sequential")
 
 seurat_obj <- if (grepl("[.]qs2$", input_rds, ignore.case = TRUE)) qs2::qs_read(input_rds) else readRDS(input_rds)
 stopifnot(celltype_col %in% colnames(seurat_obj@meta.data))
+# 可选筛选一个或多个真实细胞类型；不修改原始输入文件。
+if (length(celltypes)) {
+  missing <- setdiff(celltypes, as.character(seurat_obj@meta.data[[celltype_col]]))
+  if (length(missing)) stop("Unknown cell types: ", paste(missing, collapse = ", "))
+  keep <- rownames(seurat_obj@meta.data)[seurat_obj@meta.data[[celltype_col]] %in% celltypes]
+  seurat_obj <- subset(seurat_obj, cells = keep)
+}
 # 只保留通讯所需 RNA，释放全局 SCT/integrated 大矩阵；只改内存副本。
 DefaultAssay(seurat_obj) <- assay
 seurat_obj@assays <- seurat_obj@assays[assay]
