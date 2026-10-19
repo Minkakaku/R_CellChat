@@ -1,0 +1,20 @@
+# 所有新项目默认使用此 Nature/NPG 配色；只在用户明确要求时更换。
+name: Nature_NPG
+categorical:
+  - "#E64B35"
+  - "#4DBBD5"
+  - "#00A087"
+  - "#3C5488"
+  - "#F39B7F"
+  - "#8491B4"
+  - "#91D1C2"
+  - "#DC0000"
+  - "#7E6148"
+  - "#B09C85"
+groups:
+  CON: "#E64B35"
+  EXP: "#4DBBD5"
+cell_types: {}
+sequential: ["#FFF5F0", "#F39B7F", "#E64B35", "#7A0019"]
+diverging: ["#3C5488", "#FFFFFF", "#E64B35"]
+missing: "#C8C8C8"

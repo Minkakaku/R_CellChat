@@ -221,9 +221,16 @@ plot_cellchat_comparison <- function(cellchat_list, merged_cellchat) {
   out <- file.path(plot_dir, "comparison")
   dir.create(out, showWarnings = FALSE)
 
-  dataset_colors <- setNames(hcl.colors(length(groups), "Dark 3"), groups)
-  if ("CON" %in% groups) dataset_colors["CON"] <- "#72b1b9"
-  if ("EXP" %in% groups) dataset_colors["EXP"] <- "#f6ae00"
+  palette_path <- file.path(getwd(), "config/palette.yaml")
+  palette_config <- if (file.exists(palette_path)) yaml::read_yaml(palette_path) else list()
+  npg <- if (is.null(palette_config$categorical)) c("#E64B35", "#4DBBD5", "#00A087", "#3C5488", "#F39B7F", "#8491B4", "#91D1C2", "#DC0000", "#7E6148", "#B09C85") else unlist(palette_config$categorical, use.names = FALSE)
+  if (length(groups) > length(npg)) npg <- c(npg, colorRampPalette(npg)(length(groups) - length(npg) + 2L)[-c(1L, length(groups) - length(npg) + 2L)])
+  dataset_colors <- setNames(npg[seq_along(groups)], groups)
+  group_colors <- c(CON = "#E64B35", EXP = "#4DBBD5")
+  configured <- unlist(palette_config$groups)
+  group_colors[names(configured)] <- configured
+  known <- intersect(groups, names(group_colors))
+  dataset_colors[known] <- group_colors[known]
 
   # 总通讯数量和总通讯强度比较。
   p_count <- compareInteractions(

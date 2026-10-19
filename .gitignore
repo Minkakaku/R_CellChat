@@ -16,5 +16,6 @@ projects/*/results/**
 !projects/*/results/.gitkeep
 projects/*/logs/**
 !projects/*/logs/.gitkeep
+!projects/*/logs/README.md
 projects/*/docs/reports/**
 !projects/*/docs/reports/.gitkeep
